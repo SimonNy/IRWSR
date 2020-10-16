@@ -6,7 +6,7 @@ W = DHM^k, D: is subsampling, H is blur and M^k is translation of the given fram
 inputs:
 lrsize: LR image size (M1 x M2), rows, cols
 s: magnification factor
-psfWidth: The std of the point spread function
+psfWidth: The std of the point spread function - assumed Gaussian
 motionEstimates: The motion estimates for the given frames(assume first frame has zero translation)
 
 output:
@@ -18,6 +18,7 @@ W of size (M1 * M2) x (M1*s * M2*s)
 #%%
 import numpy as np
 from scipy.sparse import csr_matrix
+from scipy.sparse import lil_matrix
 
 def composeSystemMatrix(lrshape, magFactor, psfWidth, motionEstimate):
     # LR shape
@@ -27,17 +28,20 @@ def composeSystemMatrix(lrshape, magFactor, psfWidth, motionEstimate):
     N1, N2 = int(round(M1 * magFactor)), int(round(M2 * magFactor))
     N = N1 * N2
     # Define all the pixels in LR
-    uPrimeX0, uPrimeY0 = np.arange(0, M2), np.arange(0, M1)
+    uX, uY = np.arange(0, M2), np.arange(0, M1)
     # Define all the pixels in HR
     vX, vY = np.arange(0, N2), np.arange(0, N1)
     # max distance of the supported part of the psf. 
-    maxPsfRange = 3 * psfWidth * magFactor
+    # guarantees that it is atleast 1 pixel wide
+    maxPsfRange = max(3 * psfWidth * magFactor, 1)
     # Find subpixel positions of the given LR frame in the HR
-    uPrimeX, uPrimeY = (uPrimeX0 + motionEstimate[1])*magFactor, (uPrimeY0 + motionEstimate[0])*magFactor
+    uPrimeX, uPrimeY = (uX + motionEstimate[0])*magFactor, (uY + motionEstimate[1])*magFactor
     # initiate the matrix W 
-    W = csr_matrix((M, N))
-    # iterate over every pixel in y. 
+    """ Very inefficent to fill a spare matrix """
+    # W = csr_matrix((M, N))
+    W = lil_matrix((M, N))
 
+    # iterate over every pixel in LR. 
     for i_y in range(M1):
         for i_x in range(M2):
             # finds distance between all pixels in HR and u'
@@ -46,7 +50,7 @@ def composeSystemMatrix(lrshape, magFactor, psfWidth, motionEstimate):
             maskX, maskY = distX <= maxPsfRange, distY <= maxPsfRange
             dist = np.meshgrid(distX[maskX],distY[maskY])
             # Finds all euclidian distances within the supported square
-            dist = np.sqrt(dist[0]**2 * dist[1]**2)
+            dist = np.sqrt(dist[0]**2 + dist[1]**2)
             # mask defining the  radial support of the PSF
             mask = dist <= maxPsfRange
             # calc exponents in gaussianblur
@@ -55,8 +59,11 @@ def composeSystemMatrix(lrshape, magFactor, psfWidth, motionEstimate):
 
             # normalize
             weights = weights/np.sum(weights)
+            # Avoid nans
+            weights[np.isnan(weights)] = 0
             idx_u = i_x + i_y*M2
-            # Every row in W corresponds to a u in y, put corresponding weights at the right column
+            # Every row in W corres
+            # ponds to a u in y, put corresponding weights at the right column
             idx_v = np.meshgrid(vX[maskX], vY[maskY]*N2)
             idx_v = np.ravel(idx_v[0] + idx_v[1])
             W[idx_u, idx_v] = np.ravel(weights)
